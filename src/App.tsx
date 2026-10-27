@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import LoginPage from "./LoginPage";
 
 type Severity = "low" | "medium" | "high" | "critical";
 type Finding = {
@@ -41,6 +42,7 @@ type State = {
   eventCount: number;
   scanCount: number;
 };
+type AuthUser = { openId: string; name: string; email: string };
 
 const emptyState: State = {
   monitoring: true,
@@ -92,6 +94,9 @@ function Icon({ name }: { name: string }) {
 }
 
 function App() {
+  const [authStatus, setAuthStatus] = useState<"checking" | "guest" | "authenticated">("checking");
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authError, setAuthError] = useState("");
   const [state, setState] = useState<State>(emptyState);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [busy, setBusy] = useState<"scan" | "simulate" | "reset" | null>(null);
@@ -100,17 +105,42 @@ function App() {
 
   const loadState = async () => {
     const response = await fetch("/api/state");
+    if (response.status === 401) {
+      setUser(null);
+      setAuthStatus("guest");
+      return;
+    }
     if (response.ok) setState(await response.json());
   };
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("auth") === "error") setAuthError("The secure sign-in could not be completed. Please try again.");
+    fetch("/api/auth/me")
+      .then(async (response) => {
+        if (!response.ok) {
+          setAuthStatus("guest");
+          return;
+        }
+        const payload = await response.json();
+        setUser(payload.user);
+        setAuthStatus("authenticated");
+      })
+      .catch(() => {
+        setAuthError("The authentication service is waking up. Please try again.");
+        setAuthStatus("guest");
+      });
+  }, []);
+
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
     loadState().catch(() => setToast("Preview is waking up — retrying connection"));
     const source = new EventSource("/api/events");
     source.onmessage = (event) => setState(JSON.parse(event.data));
     source.onerror = () => source.close();
     const interval = window.setInterval(() => loadState().catch(() => {}), 6000);
     return () => { source.close(); window.clearInterval(interval); };
-  }, []);
+  }, [authStatus]);
 
   useEffect(() => {
     if (!toast) return;
@@ -131,6 +161,12 @@ function App() {
     setToast(kind === "simulate" ? "Safe simulation armed · synthetic files only" : kind === "reset" ? "Restoring app-owned fixture…" : "Scanning redacted signals…");
     try {
       const response = await fetch(`/api/${kind === "simulate" ? "simulate" : kind}`, { method: "POST" });
+      if (response.status === 401) {
+        setUser(null);
+        setAuthStatus("guest");
+        return;
+      }
+      if (!response.ok) throw new Error("Action failed");
       const next = await response.json();
       setState(next);
       setToast(kind === "simulate" ? "Simulation complete · nothing encrypted or deleted" : kind === "reset" ? "Demo reset · boundary still locked" : "Scan complete · path mapped");
@@ -143,6 +179,15 @@ function App() {
 
   const downloadReport = async () => {
     const response = await fetch("/api/report");
+    if (response.status === 401) {
+      setUser(null);
+      setAuthStatus("guest");
+      return;
+    }
+    if (!response.ok) {
+      setToast("Report could not be generated — try again");
+      return;
+    }
     const report = await response.json();
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -158,6 +203,20 @@ function App() {
     setActiveView(label);
     window.requestAnimationFrame(() => document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
+
+  const startLogin = () => { window.location.assign("/api/auth/login"); };
+  const logout = async () => {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.assign("/");
+  };
+
+  if (authStatus === "checking") {
+    return <main className="auth-loading"><div className="loading-mark"><span></span><span></span><span></span><span></span></div><span>VERIFYING OBSERVATORY ACCESS</span></main>;
+  }
+
+  if (authStatus === "guest") {
+    return <LoginPage error={authError} onLogin={startLogin} />;
+  }
 
   return (
     <div className="app-shell">
@@ -182,7 +241,7 @@ function App() {
       <main className="main-canvas">
         <header className="topbar">
           <div className="breadcrumb"><span>OBSERVATORY</span><Icon name="chevron" /><strong>{activeView.toUpperCase()}</strong></div>
-          <div className="topbar-actions"><div className="monitoring-chip"><span className="pulse-ring"></span> MONITORING <b>ON</b></div><span className="topbar-date">{formatDate(state.lastScan)}</span><button className="icon-button" aria-label="Download report" onClick={downloadReport}><Icon name="download" /></button></div>
+          <div className="topbar-actions"><div className="monitoring-chip"><span className="pulse-ring"></span> MONITORING <b>ON</b></div><span className="topbar-date">{formatDate(state.lastScan)}</span><div className="operator-chip"><span>{(user?.name || "O").slice(0, 1).toUpperCase()}</span><div><strong>{user?.name || "Operator"}</strong><small>{user?.email || "Manus account"}</small></div></div><button className="icon-button" aria-label="Download report" onClick={downloadReport}><Icon name="download" /></button><button className="logout-button" onClick={logout}>LOG OUT</button></div>
         </header>
 
         <div className="content-wrap">

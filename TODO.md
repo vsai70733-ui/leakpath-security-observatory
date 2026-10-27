@@ -1,5 +1,10 @@
 # LeakPath Delivery Outcomes
 
+- [x] **Secure Manus OAuth login**
+  - The application opens with a polished login page and a real Manus OAuth sign-in action.
+  - OAuth state is nonce-bound, the callback is fixed to the application origin, and the session uses the required `webdev_app_session` cookie with `SameSite=None; Secure`.
+  - Protected dashboard APIs validate the HS256 session, verify the managed project `appId`, expose the signed-in operator, and support logout.
+
 - [x] **Safe demo workspace and simulator**
   - The application creates and manages an isolated `demo-workspace/` fixture area.
   - Simulation operates only inside that workspace, rejects arbitrary system paths, uses synthetic credentials, never encrypts files, never deletes real files, and exposes clear simulation boundaries.
@@ -32,9 +37,9 @@
 
 - [x] **Repository-ready delivery**
   - Setup instructions, architecture notes, threat-model boundaries, package scripts, route manifest, and a security policy are included.
-  - The app has a working managed preview, health endpoint, and automated checks for the server scanner and build.
+  - The app has a working managed preview, health endpoint, and automated checks for OAuth gating, protected APIs, scanner behavior, SSE, redaction, and build.
   - The dashboard is visually polished with responsive layout, motion, reduced-motion support, and a clear responsible-use notice.
 
 ## Verification evidence
 
-`npm run build`, `npx tsc --noEmit`, and `npm run test:smoke` pass against the live preview. The smoke flow covers health, workspace boundary, safe simulation, redacted report output, and reset.
+`npm run build`, `npx tsc --noEmit`, and `npm run test:smoke` pass against the live preview. The authenticated smoke flow covers public health, unauthenticated rejection, OAuth redirect shape, signed session identity, protected workspace state, SSE delivery, safe simulation, multi-signal detection, template exclusion, redacted reporting, and reset.

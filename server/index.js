@@ -1,5 +1,7 @@
 import express from "express";
+import jwt from "jsonwebtoken";
 import mysql from "mysql2/promise";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -9,8 +11,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 const workspaceRoot = path.resolve(projectRoot, "demo-workspace");
 const port = Number(process.env.PORT || 3000);
+const sessionCookieName = "webdev_app_session";
+const oauthStateCookieName = "leakpath_oauth_state";
+const sessionLifetimeSeconds = 8 * 60 * 60;
 const app = express();
 const clients = new Set();
+const oauthNonces = new Map();
 let pool = null;
 let simulationRunning = false;
 let watcher = null;
@@ -156,11 +162,141 @@ async function initializePersistence() {
       category VARCHAR(60) NOT NULL,
       created_at DATETIME NOT NULL
     )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS leakpath_users (
+      open_id VARCHAR(191) PRIMARY KEY,
+      email VARCHAR(255) NULL,
+      display_name VARCHAR(255) NULL,
+      last_seen DATETIME NOT NULL
+    )`);
     console.log("LeakPath event store connected.");
   } catch (error) {
     pool = null;
     console.log("LeakPath is using the in-memory event store for this preview.");
   }
+}
+
+function parseCookies(header = "") {
+  const cookies = {};
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 1) continue;
+    const name = part.slice(0, separator).trim();
+    const value = part.slice(separator + 1).trim();
+    try {
+      cookies[name] = decodeURIComponent(value);
+    } catch {
+      continue;
+    }
+  }
+  return cookies;
+}
+
+function serializeCookie(name, value, maxAge) {
+  return `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=None; Secure`;
+}
+
+function requestOrigin(req) {
+  const configuredOrigin = process.env.MANUS_ADDON_PREVIEW_PUBLIC_ORIGIN || process.env.MANUS_ADDON_RUNTIME_PUBLIC_ORIGIN;
+  if (configuredOrigin) return configuredOrigin.replace(/\/$/, "");
+  const forwardedHost = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  if (!forwardedHost) throw new Error("Cannot determine the browser callback origin.");
+  const trustedHost = forwardedHost.endsWith(".manus.computer") || forwardedHost === "localhost" || forwardedHost.startsWith("127.0.0.1:");
+  if (!trustedHost) throw new Error("Untrusted browser callback origin.");
+  return `${forwardedProto}://${forwardedHost}`;
+}
+
+function callbackUri(req) {
+  return `${requestOrigin(req)}/manus-oauth/callback`;
+}
+
+function encodeState(value) {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function decodeState(value) {
+  return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+}
+
+function randomNonce() {
+  return randomBytes(32).toString("base64url");
+}
+
+function normalizeUser(identity) {
+  const openId = identity?.openId || identity?.open_id || identity?.sub;
+  if (!openId) throw new Error("Manus identity did not include an openId.");
+  return {
+    openId: String(openId),
+    name: String(identity.name || identity.displayName || identity.email || "LeakPath operator"),
+    email: identity.email ? String(identity.email) : ""
+  };
+}
+
+function userFromClaims(claims) {
+  const appId = claims.appId || claims.app_id;
+  if (!process.env.MANUS_PROJECT_ID || appId !== process.env.MANUS_PROJECT_ID) return null;
+  try {
+    return normalizeUser({ openId: claims.openId || claims.open_id || claims.sub, name: claims.name, email: claims.email });
+  } catch {
+    return null;
+  }
+}
+
+function authenticateRequest(req) {
+  const secret = process.env.MANUS_JWT_SECRET;
+  if (!secret || !process.env.MANUS_PROJECT_ID) return null;
+  const token = parseCookies(req.headers.cookie)[sessionCookieName];
+  if (!token) return null;
+  try {
+    const claims = jwt.verify(token, secret, { algorithms: ["HS256"] });
+    return userFromClaims(claims);
+  } catch {
+    return null;
+  }
+}
+
+function requireAuth(req, res, next) {
+  const user = authenticateRequest(req);
+  if (!user) return res.status(401).json({ authenticated: false, error: "AUTH_REQUIRED" });
+  req.user = user;
+  recordUser(user).catch(() => {});
+  next();
+}
+
+async function recordUser(user) {
+  if (!pool) return;
+  await pool.execute(
+    "INSERT INTO leakpath_users (open_id, email, display_name, last_seen) VALUES (?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE email = VALUES(email), display_name = VALUES(display_name), last_seen = NOW()",
+    [user.openId, user.email, user.name]
+  );
+}
+
+async function exchangeOAuthCode(code, redirectUri) {
+  const response = await fetch(`${process.env.MANUS_OAUTH_API_URL}/webdev.v1.WebDevAuthPublicService/ExchangeToken`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clientId: process.env.MANUS_PROJECT_ID, grantType: "authorization_code", code, redirectUri })
+  });
+  if (!response.ok) throw new Error("Manus OAuth code exchange failed.");
+  return response.json();
+}
+
+async function fetchManusIdentity(accessToken) {
+  const response = await fetch(`${process.env.MANUS_OAUTH_API_URL}/webdev.v1.WebDevAuthPublicService/GetUserInfo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ accessToken })
+  });
+  if (!response.ok) throw new Error("Manus identity lookup failed.");
+  return response.json();
+}
+
+function issueSession(user) {
+  return jwt.sign(
+    { appId: process.env.MANUS_PROJECT_ID, openId: user.openId, name: user.name, email: user.email },
+    process.env.MANUS_JWT_SECRET,
+    { algorithm: "HS256", expiresIn: sessionLifetimeSeconds }
+  );
 }
 
 async function seedWorkspace() {
@@ -356,8 +492,57 @@ async function startWorkspaceWatcher() {
 app.use(express.json({ limit: "64kb" }));
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "leakpath", monitoring: state.monitoring }));
-app.get("/api/state", (_req, res) => res.json(state));
-app.get("/api/events", (req, res) => {
+app.get("/api/auth/me", (req, res) => {
+  const user = authenticateRequest(req);
+  if (!user) return res.status(401).json({ authenticated: false, error: "AUTH_REQUIRED" });
+  recordUser(user).catch(() => {});
+  res.json({ authenticated: true, user });
+});
+app.get("/api/auth/login", (req, res) => {
+  if (!process.env.MANUS_PROJECT_ID || !process.env.MANUS_OAUTH_PORTAL_URL || !process.env.MANUS_JWT_SECRET) {
+    return res.status(503).json({ error: "OAuth is not configured for this project." });
+  }
+  const nonce = randomNonce();
+  const redirectUri = callbackUri(req);
+  const encodedState = encodeState({ redirectUri, nonce });
+  oauthNonces.set(nonce, Date.now() + 600_000);
+  for (const [knownNonce, expiresAt] of oauthNonces) if (expiresAt < Date.now()) oauthNonces.delete(knownNonce);
+  const authorizeUrl = new URL(`${process.env.MANUS_OAUTH_PORTAL_URL}/app-auth`);
+  authorizeUrl.searchParams.set("appId", process.env.MANUS_PROJECT_ID);
+  authorizeUrl.searchParams.set("redirectUri", redirectUri);
+  authorizeUrl.searchParams.set("state", encodedState);
+  authorizeUrl.searchParams.set("responseType", "code");
+  res.setHeader("Set-Cookie", serializeCookie(oauthStateCookieName, nonce, 600));
+  res.redirect(authorizeUrl.toString());
+});
+app.get("/manus-oauth/callback", async (req, res) => {
+  try {
+    const code = String(req.query.code || "");
+    const returnedState = String(req.query.state || "");
+    const storedNonce = parseCookies(req.headers.cookie)[oauthStateCookieName];
+    const state = decodeState(returnedState);
+    const expectedRedirectUri = callbackUri(req);
+    const nonceExpiry = storedNonce ? oauthNonces.get(storedNonce) : undefined;
+    if (!code || !storedNonce || !nonceExpiry || nonceExpiry < Date.now() || state.nonce !== storedNonce || state.redirectUri !== expectedRedirectUri) throw new Error("OAuth state validation failed.");
+    oauthNonces.delete(storedNonce);
+    const exchange = await exchangeOAuthCode(code, expectedRedirectUri);
+    const user = normalizeUser(await fetchManusIdentity(exchange.accessToken));
+    await recordUser(user);
+    const session = issueSession(user);
+    res.setHeader("Set-Cookie", [serializeCookie(oauthStateCookieName, "", 0), serializeCookie(sessionCookieName, session, sessionLifetimeSeconds)]);
+    res.redirect("/");
+  } catch (error) {
+    console.error("LeakPath OAuth callback failed:", error.message);
+    res.setHeader("Set-Cookie", serializeCookie(oauthStateCookieName, "", 0));
+    res.redirect("/?auth=error");
+  }
+});
+app.post("/api/auth/logout", (_req, res) => {
+  res.setHeader("Set-Cookie", serializeCookie(sessionCookieName, "", 0));
+  res.redirect("/");
+});
+app.get("/api/state", requireAuth, (_req, res) => res.json(state));
+app.get("/api/events", requireAuth, (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -366,10 +551,10 @@ app.get("/api/events", (req, res) => {
   clients.add(res);
   req.on("close", () => clients.delete(res));
 });
-app.post("/api/scan", async (_req, res) => res.json(await scanWorkspace()));
-app.post("/api/simulate", async (_req, res) => res.json(await runSafeSimulation()));
-app.post("/api/reset", async (_req, res) => res.json(await resetWorkspace()));
-app.get("/api/report", (_req, res) => {
+app.post("/api/scan", requireAuth, async (_req, res) => res.json(await scanWorkspace()));
+app.post("/api/simulate", requireAuth, async (_req, res) => res.json(await runSafeSimulation()));
+app.post("/api/reset", requireAuth, async (_req, res) => res.json(await resetWorkspace()));
+app.get("/api/report", requireAuth, (_req, res) => {
   res.json({
     product: "LeakPath",
     generatedAt: new Date().toISOString(),

@@ -11,6 +11,7 @@ LeakPath is a live defensive DevSecOps observatory that watches an application-o
 - Safe simulator that only writes fake files inside `demo-workspace/`
 - Non-destructive remediation guidance and report download
 - Responsive observatory UI with accessible motion and reduced-motion support
+- Manus OAuth login page with secure `webdev_app_session` application sessions
 
 ## Run locally
 
@@ -19,21 +20,23 @@ npm install
 npm run dev
 ```
 
-Open the managed Preview or `http://localhost:3000`. The project uses `DATABASE_URL` when available to persist event records. If it is absent, the preview uses an in-memory fallback so the safety demo remains usable.
+Open the managed Preview. LeakPath starts on a protected login page and uses the managed Manus account OAuth flow; it does not create or store a separate password database. The project uses `DATABASE_URL` when available to persist event records and recognized operators. If it is absent, the preview uses an in-memory fallback so the safety demo remains usable.
 
 ## Demo flow
 
-1. Review the current score and the exposure-path ribbon.
-2. Press **Scan workspace** to run the synthetic scanner.
-3. Press **Run safe simulation** to create harmless fake files and watch the stream update.
-4. Open a finding to see redacted evidence and Git rationale.
-5. Download the generated report.
-6. Press **Reset demo** to restore only the app-owned fixture workspace.
+1. Select **Continue with Manus** and complete the managed OAuth sign-in.
+2. Review the current score and the exposure-path ribbon.
+3. Press **Scan workspace** to run the synthetic scanner.
+4. Press **Run safe simulation** to create harmless fake files and watch the stream update.
+5. Open a finding to see redacted evidence and Git rationale.
+6. Download the generated report, then use **Log out** when finished.
+7. Press **Reset demo** to restore only the app-owned fixture workspace.
 
 ## Architecture
 
-- `server/index.js` owns the safe workspace boundary, scanner, risk engine, SSE stream, report payload, and persistence hook.
-- `src/App.tsx` renders the observatory surface and handles actions.
+- `server/index.js` owns Manus OAuth, JWT session validation, the safe workspace boundary, scanner, risk engine, SSE stream, report payload, and persistence hook.
+- `src/App.tsx` renders the authenticated observatory surface and handles actions.
+- `src/LoginPage.tsx` renders the logged-out access experience and starts the OAuth redirect.
 - `src/styles.css` contains the visual language, charts, motion, and responsive states.
 - `demo-workspace/` is the only directory the simulator may modify.
 
