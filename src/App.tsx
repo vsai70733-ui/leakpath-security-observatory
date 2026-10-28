@@ -127,8 +127,7 @@ function App() {
 
   useEffect(() => {
     if (staticDemo) {
-      setUser({ openId: "static-demo", name: "LeakPath Demo Operator", email: "public-demo@leakpath.local" });
-      setAuthStatus("authenticated");
+      setAuthStatus("guest");
       return;
     }
     const params = new URLSearchParams(window.location.search);
@@ -236,7 +235,14 @@ function App() {
     window.requestAnimationFrame(() => document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
-  const startLogin = () => { window.location.assign("/api/auth/login"); };
+  const startLogin = () => {
+    if (staticDemo) {
+      setUser({ openId: "static-demo", name: "LeakPath Demo Operator", email: "public-demo@leakpath.local" });
+      setAuthStatus("authenticated");
+      return;
+    }
+    window.location.assign("/api/auth/login");
+  };
   const logout = async () => {
     if (staticDemo) {
       setToast("Public demo mode stays available for review");
