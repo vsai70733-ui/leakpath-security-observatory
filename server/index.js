@@ -196,7 +196,7 @@ function serializeCookie(name, value, maxAge) {
 }
 
 function requestOrigin(req) {
-  const configuredOrigin = process.env.MANUS_ADDON_PREVIEW_PUBLIC_ORIGIN || process.env.MANUS_ADDON_RUNTIME_PUBLIC_ORIGIN;
+  const configuredOrigin = process.env.PUBLIC_ORIGIN || process.env.MANUS_ADDON_PREVIEW_PUBLIC_ORIGIN || process.env.MANUS_ADDON_RUNTIME_PUBLIC_ORIGIN;
   if (configuredOrigin) return configuredOrigin.replace(/\/$/, "");
   const forwardedHost = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
