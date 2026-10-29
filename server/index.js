@@ -201,7 +201,7 @@ function requestOrigin(req) {
   const forwardedHost = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
   if (!forwardedHost) throw new Error("Cannot determine the browser callback origin.");
-  const trustedHost = forwardedHost.endsWith(".manus.computer") || forwardedHost === "localhost" || forwardedHost.startsWith("127.0.0.1:");
+  const trustedHost = forwardedHost.endsWith(".manus.computer") || forwardedHost.endsWith(".manus.space") || forwardedHost === "localhost" || forwardedHost.startsWith("127.0.0.1:");
   if (!trustedHost) throw new Error("Untrusted browser callback origin.");
   return `${forwardedProto}://${forwardedHost}`;
 }
