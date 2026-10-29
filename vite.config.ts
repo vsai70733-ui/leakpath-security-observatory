@@ -3,5 +3,5 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
-  base: "/leakpath-security-observatory/",
+  base: process.env.VITE_STATIC_DEMO === "true" ? "/leakpath-security-observatory/" : "/",
 });

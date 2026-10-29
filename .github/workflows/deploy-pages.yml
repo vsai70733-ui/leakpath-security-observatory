@@ -28,7 +28,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Build static demo
-        run: npm run build
+        run: VITE_STATIC_DEMO=true npm run build
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
