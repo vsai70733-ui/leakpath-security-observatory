@@ -199,11 +199,12 @@ function requestOrigin(req) {
   const configuredOrigin = process.env.PUBLIC_ORIGIN || process.env.MANUS_ADDON_PREVIEW_PUBLIC_ORIGIN || process.env.MANUS_ADDON_RUNTIME_PUBLIC_ORIGIN;
   if (configuredOrigin) return configuredOrigin.replace(/\/$/, "");
   const forwardedHost = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  const normalizedHost = forwardedHost.replace(/:\d+$/, "");
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
   if (!forwardedHost) throw new Error("Cannot determine the browser callback origin.");
-  const trustedHost = forwardedHost.endsWith(".manus.computer") || forwardedHost.endsWith(".manus.space") || forwardedHost === "localhost" || forwardedHost.startsWith("127.0.0.1:");
+  const trustedHost = normalizedHost.endsWith(".manus.computer") || normalizedHost.endsWith(".manus.space") || forwardedHost === "localhost" || forwardedHost.startsWith("127.0.0.1:");
   if (!trustedHost) throw new Error("Untrusted browser callback origin.");
-  return `${forwardedProto}://${forwardedHost}`;
+  return `${forwardedProto}://${normalizedHost}`;
 }
 
 function callbackUri(req) {
