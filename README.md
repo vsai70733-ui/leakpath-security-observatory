@@ -22,6 +22,10 @@ npm run dev
 
 Open the managed Preview. LeakPath starts on a protected login page and uses the managed Manus account OAuth flow; it does not create or store a separate password database. The project uses `DATABASE_URL` when available to persist event records and recognized operators. If it is absent, the preview uses an in-memory fallback so the safety demo remains usable.
 
+## Full-stack deployment with real user login
+
+The real login flow is Manus OAuth: users select **Continue with Manus** and authenticate with their Manus account email. GitHub Pages cannot run this flow because it does not provide the Express backend, secure session cookies, or OAuth callback handling. Deploy the Node service using `render.yaml` or another full-stack host, then configure the variables listed in `.env.example`—especially `MANUS_PROJECT_ID`, `MANUS_OAUTH_PORTAL_URL`, `MANUS_OAUTH_API_URL`, and the deployed HTTPS `PUBLIC_ORIGIN`. Never commit `MANUS_JWT_SECRET` or any provider credentials.
+
 ## Demo flow
 
 1. Select **Continue with Manus** and complete the managed OAuth sign-in.

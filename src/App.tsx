@@ -63,6 +63,17 @@ const emptyState: State = {
 };
 
 const severityOrder: Record<string, number> = { low: 1, medium: 2, high: 3, critical: 4 };
+const staticDemo = import.meta.env.VITE_STATIC_DEMO === "true";
+
+function demoState(): State {
+  const now = new Date().toISOString();
+  const findings: Finding[] = [
+    { id: "finding_demo_1", file: "config/dev.env", type: "API key", severity: "high", confidence: 0.96, evidence: "API_K••••2d", rationale: "API key pattern found; not ignored — likely to be added by accident.", gitState: "untracked", gitDetail: "Not ignored — likely to be added by accident", missingIgnore: true, remediation: "Move the key to a runtime secret store and keep the file ignored.", path: ["File created", "Signal detected", "Git untracked", "Review before sharing"] },
+    { id: "finding_demo_2", file: "src/api.ts", type: "Password", severity: "high", confidence: 0.96, evidence: "demo-••••ord", rationale: "Password pattern found; staged in the educational fixture.", gitState: "staged", gitDetail: "Staged in the educational fixture", missingIgnore: false, remediation: "Replace the inline password with an environment variable reference.", path: ["File created", "Signal detected", "Git staged", "Review before sharing"] },
+    { id: "finding_demo_3", file: "demo-workspace/.env.example", type: "API key", severity: "medium", confidence: 0.96, evidence: "[redacted demo value]", rationale: "Template value safely marked for runtime replacement.", gitState: "working tree", gitDetail: "Local-only demo file", missingIgnore: false, remediation: "Keep templates free of real credentials.", path: ["File created", "Signal detected", "Local review", "Review before sharing"] },
+  ];
+  return { monitoring: true, simulationRunning: false, workspace: "demo-workspace/", lastScan: now, riskScore: 72, riskLevel: "HIGH", findings, events: [{ id: "evt_demo", time: now, activity: "Scan complete", file: "demo-workspace/", severity: "high", message: "Synthetic signals mapped across the safe fixture workspace.", category: "monitor" }], factors: [{ label: "Sensitive patterns", value: 3, detail: "3 redacted signals found" }, { label: "Git exposure paths", value: 2, detail: "2 findings have a Git state" }, { label: "Ignore protection gaps", value: 1, detail: "1 file needs ignore protection" }], gitRisks: 2, sensitiveFiles: 3, affectedFiles: 3, openAlerts: 2, eventCount: 1, scanCount: 1 };
+}
 
 function formatTime(value: string) {
   return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date(value));
@@ -97,13 +108,14 @@ function App() {
   const [authStatus, setAuthStatus] = useState<"checking" | "guest" | "authenticated">("checking");
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authError, setAuthError] = useState("");
-  const [state, setState] = useState<State>(emptyState);
+  const [state, setState] = useState<State>(staticDemo ? demoState() : emptyState);
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [busy, setBusy] = useState<"scan" | "simulate" | "reset" | null>(null);
   const [toast, setToast] = useState("Monitor online · safe boundary locked");
   const [activeView, setActiveView] = useState("Overview");
 
   const loadState = async () => {
+    if (staticDemo) return;
     const response = await fetch("/api/state");
     if (response.status === 401) {
       setUser(null);
@@ -114,6 +126,10 @@ function App() {
   };
 
   useEffect(() => {
+    if (staticDemo) {
+      setAuthStatus("guest");
+      return;
+    }
     const params = new URLSearchParams(window.location.search);
     if (params.get("auth") === "error") setAuthError("The secure sign-in could not be completed. Please try again.");
     fetch("/api/auth/me")
@@ -160,6 +176,10 @@ function App() {
     setBusy(kind);
     setToast(kind === "simulate" ? "Safe simulation armed · synthetic files only" : kind === "reset" ? "Restoring app-owned fixture…" : "Scanning redacted signals…");
     try {
+      if (staticDemo) {
+        setState((previous) => ({ ...previous, lastScan: new Date().toISOString(), scanCount: previous.scanCount + (kind === "scan" ? 1 : 0), eventCount: previous.eventCount + 1, events: [{ id: `evt_static_${Date.now()}`, time: new Date().toISOString(), activity: kind === "simulate" ? "Safe simulation" : kind === "reset" ? "Demo reset" : "Scan complete", file: "demo-workspace/", severity: kind === "reset" ? "low" : "medium", message: kind === "simulate" ? "Synthetic files created inside the locked demo boundary." : kind === "reset" ? "The app-owned fixture workspace was restored." : "Synthetic signals mapped across the safe fixture workspace.", category: "monitor" }, ...previous.events].slice(0, 20) }));
+        return;
+      }
       const response = await fetch(`/api/${kind === "simulate" ? "simulate" : kind}`, { method: "POST" });
       if (response.status === 401) {
         setUser(null);
@@ -178,6 +198,17 @@ function App() {
   };
 
   const downloadReport = async () => {
+    if (staticDemo) {
+      const blob = new Blob([JSON.stringify({ generatedAt: new Date().toISOString(), workspace: state.workspace, riskScore: state.riskScore, findings: state.findings }, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `leakpath-report-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setToast("Report downloaded · evidence remains redacted");
+      return;
+    }
     const response = await fetch("/api/report");
     if (response.status === 401) {
       setUser(null);
@@ -204,8 +235,19 @@ function App() {
     window.requestAnimationFrame(() => document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
-  const startLogin = () => { window.location.assign("/api/auth/login"); };
+  const startLogin = () => {
+    if (staticDemo) {
+      setUser({ openId: "static-demo", name: "LeakPath Demo Operator", email: "public-demo@leakpath.local" });
+      setAuthStatus("authenticated");
+      return;
+    }
+    window.location.assign("/api/auth/login");
+  };
   const logout = async () => {
+    if (staticDemo) {
+      setToast("Public demo mode stays available for review");
+      return;
+    }
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.assign("/");
   };
